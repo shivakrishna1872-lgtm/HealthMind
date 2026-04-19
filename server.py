@@ -21,7 +21,6 @@ load_dotenv()
 mcp = FastMCP(
     name="healthmind",
     version="1.0.0",
-    description="Prescription safety agent using openFDA and FHIR",
 )
 
 OPENFDA_BASE = os.getenv("OPENFDA_BASE_URL", "https://api.fda.gov/drug")
@@ -150,4 +149,4 @@ if __name__ == "__main__":
     host = os.getenv("MCP_HOST", "0.0.0.0")
     port = int(os.getenv("MCP_PORT", 8000))
     print(f"HealthMind FastMCP server starting on {host}:{port}")
-    mcp.run(host=host, port=port)
+    mcp.run(transport="http", host=host, port=port)

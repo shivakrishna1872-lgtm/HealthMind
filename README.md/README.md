@@ -28,6 +28,32 @@ Mobile app:
 cd mobile && npm install && npx expo start
 ```
 
+## Test with fake FHIR data
+
+HealthMind includes synthetic FHIR bundles in `fhir_samples.py` for local demos.
+
+```bash
+python - <<'PY'
+import json, asyncio
+from server import safety_check
+from fhir_samples import get_sample_case
+
+case = get_sample_case("high_risk_ckd_nsaid_block")
+result = asyncio.run(
+    safety_check(
+        proposed_medication=case["proposed_medication"],
+        patient_fhir_json=json.dumps(case["bundle"]),
+    )
+)
+print(json.dumps(result, indent=2))
+PY
+```
+
+Available sample cases:
+- `high_risk_ckd_nsaid_block`
+- `warn_bleeding_risk`
+- `allow_low_risk_baseline`
+
 ## Push to GitHub
 
 ```bash

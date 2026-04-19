@@ -11,8 +11,7 @@
       "backgroundColor": "#0A0A14"
     },
     "plugins": [
-      "expo-router",
-      "expo-haptics"
+      "expo-router"
     ],
     "ios": { "supportsTablet": false },
     "android": { "adaptiveIcon": { "backgroundColor": "#0A0A14" } }
