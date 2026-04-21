@@ -66,6 +66,30 @@ export const api = {
     return data
   },
 
+  diagnose: async (symptoms: string, patient_fhir_json: string | object) => {
+    const payload = {
+      symptoms,
+      patient_fhir_json:
+        typeof patient_fhir_json === 'string'
+          ? patient_fhir_json
+          : JSON.stringify(patient_fhir_json),
+    }
+    const { data } = await client.post<any>('/diagnose', payload)
+    return data
+  },
+
+  analyze: async (text: string, patient_fhir_json: string | object) => {
+    const payload = {
+      text,
+      patient_fhir_json:
+        typeof patient_fhir_json === 'string'
+          ? patient_fhir_json
+          : JSON.stringify(patient_fhir_json),
+    }
+    const { data } = await client.post<any>('/analyze', payload)
+    return data
+  },
+
   health: async () => {
     const { data } = await client.get('/health')
     return data

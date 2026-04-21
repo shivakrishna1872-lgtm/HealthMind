@@ -269,6 +269,16 @@ class SafetyBuffer:
             ),
         }
 
+    def generate_clinical_summary(self) -> dict[str, Any]:
+        """Generate a structured summary for clinical reporting."""
+        return {
+            "patient_name": self.patient_name,
+            "proposed_medication": self.proposed_medication,
+            "conditions": self.conditions,
+            "medications": self.current_medications,
+            "allergies": self.allergies,
+        }
+
     def _build_sharp_recommendation(
         self,
         status: str,

@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ShieldCheck, XCircle, AlertTriangle, CheckCircle, Users, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react'
+import { ShieldCheck, XCircle, AlertTriangle, CheckCircle, Users, AlertCircle, ChevronDown, ChevronUp, Download } from 'lucide-react'
 import { api, SafetyCheckResult } from '../services/api'
 import { SAMPLE_FHIR } from '../constants/sampleFhir'
 import { useReportStore } from '../store/reportStore'
+import { generatePDF } from '../services/reportGenerator'
 
 const STATUS_CONFIG = {
   BLOCK: {
@@ -88,6 +89,28 @@ export default function SafetyCheck() {
     }
   }
 
+  const exportReport = () => {
+    if (!result) return
+    generatePDF({
+      type: 'SAFETY_CHECK',
+      patient: {
+        name: result.patient?.name || 'Unknown',
+        age: result.patient?.age || 'N/A',
+        gender: result.patient?.gender || 'N/A',
+        conditions: result.patient?.conditions || [],
+        medications: result.patient?.medications || [],
+        allergies: result.patient?.allergies || [],
+      },
+      findings: {
+        title: 'Safety Check Result',
+        status: result.status,
+        priority: result.priority,
+        content: result.reasons,
+        recommendation: result.sharp_recommendation,
+      },
+    })
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && canSubmit) runCheck()
   }
@@ -111,15 +134,17 @@ export default function SafetyCheck() {
         style={{ marginTop: 28 }}
       >
         <label className="input-label">PROPOSED MEDICATION</label>
-        <input
-          className="input"
-          type="text"
-          placeholder="e.g., Ibuprofen, Metformin, Aspirin..."
-          value={medication}
-          onChange={(e) => setMedication(e.target.value)}
-          onKeyDown={handleKeyDown}
-          style={{ borderColor: medication ? 'var(--accent)' : undefined }}
-        />
+        <div style={{ display: 'flex', gap: 10 }}>
+          <input
+            className="input"
+            type="text"
+            placeholder="e.g., Ibuprofen, Metformin, Aspirin..."
+            value={medication}
+            onChange={(e) => setMedication(e.target.value)}
+            onKeyDown={handleKeyDown}
+            style={{ borderColor: medication ? 'var(--accent)' : undefined }}
+          />
+        </div>
       </motion.div>
 
       {/* Patient Source Toggle */}
@@ -178,7 +203,7 @@ export default function SafetyCheck() {
       >
         <button className="btn btn-primary btn-block" disabled={!canSubmit} onClick={runCheck}>
           <ShieldCheck size={18} />
-          {loading ? 'Analyzing...' : 'Run Safety Check'}
+          {loading ? 'Analyzing Clinical Rules...' : 'Run Safety Check'}
         </button>
       </motion.div>
 
@@ -198,28 +223,6 @@ export default function SafetyCheck() {
         )}
       </AnimatePresence>
 
-      {/* Error */}
-      <AnimatePresence>
-        {error && (
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -5 }}
-            style={{
-              marginTop: 24, padding: 20,
-              background: 'var(--danger-bg)', border: '1px solid var(--danger-border)',
-              borderRadius: 'var(--radius-lg)', display: 'flex', gap: 12, alignItems: 'flex-start',
-            }}
-          >
-            <AlertCircle size={20} color="var(--danger)" style={{ flexShrink: 0, marginTop: 1 }} />
-            <div>
-              <div style={{ fontWeight: 700, color: 'var(--danger)', marginBottom: 4, fontSize: 14 }}>Error</div>
-              <div style={{ color: '#FF8A8A', fontSize: 13, lineHeight: 1.5 }}>{error}</div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* Results */}
       <AnimatePresence>
         {result && cfg && (
@@ -235,16 +238,25 @@ export default function SafetyCheck() {
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.35 }}
               className={`status-banner ${cfg.bannerClass}`}
+              style={{ position: 'relative' }}
             >
               <div className="status-banner-icon">
                 <cfg.icon size={30} color={cfg.color} />
               </div>
-              <div>
+              <div style={{ flex: 1 }}>
                 <div className="status-banner-label">{cfg.label}</div>
                 <div className="status-banner-sub">
                   {result.proposed_medication} — Priority: {result.priority.toUpperCase()}
                 </div>
               </div>
+              <button 
+                className="btn btn-ghost btn-sm" 
+                onClick={exportReport}
+                style={{ height: 40, background: 'rgba(255,255,255,0.05)' }}
+              >
+                <Download size={16} />
+                Export PDF
+              </button>
             </motion.div>
 
             {/* Clinical Rationale */}
@@ -271,39 +283,13 @@ export default function SafetyCheck() {
               className="card"
             >
               <div className="section-label">PATIENT CONTEXT</div>
-              <InfoRow label="Name" value={result.patient?.name || 'Unknown'} />
-              <InfoRow label="Age / Gender" value={`${result.patient?.age ?? 'N/A'} / ${result.patient?.gender || 'N/A'}`} />
-              <InfoRow label="Conditions" value={result.patient?.conditions?.join(', ') || 'None documented'} />
-              <InfoRow label="Current Medications" value={result.patient?.medications?.join(', ') || 'None documented'} />
-              <InfoRow label="Allergies" value={result.patient?.allergies?.length ? result.patient.allergies.join(', ') : 'None documented'} />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                <InfoRow label="Name" value={result.patient?.name || 'Unknown'} />
+                <InfoRow label="Age / Gender" value={`${result.patient?.age ?? 'N/A'} / ${result.patient?.gender || 'N/A'}`} />
+                <InfoRow label="Conditions" value={result.patient?.conditions?.join(', ') || 'None documented'} />
+                <InfoRow label="Current Medications" value={result.patient?.medications?.join(', ') || 'None documented'} />
+              </div>
             </motion.div>
-
-            {/* FDA Interactions */}
-            {result.fda_interactions?.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.25, duration: 0.35 }}
-                className="card"
-              >
-                <div className="section-label">FDA ADVERSE EVENT REPORTS</div>
-                {result.fda_interactions.map((inter, i) => (
-                  <div key={i} style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                    padding: '10px 0', borderBottom: i < result.fda_interactions.length - 1 ? '1px solid var(--border-subtle)' : 'none',
-                  }}>
-                    <span style={{ fontSize: 14, color: 'var(--text-primary)' }}>{inter.drug_pair}</span>
-                    <span style={{
-                      fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 'var(--radius-full)',
-                      background: inter.severity === 'high' ? 'var(--danger-bg)' : inter.severity === 'medium' ? 'var(--warning-bg)' : 'var(--bg-surface)',
-                      color: inter.severity === 'high' ? 'var(--danger)' : inter.severity === 'medium' ? 'var(--warning)' : 'var(--text-muted)',
-                    }}>
-                      {inter.total_fda_reports} reports · {inter.severity}
-                    </span>
-                  </div>
-                ))}
-              </motion.div>
-            )}
 
             {/* SHARP Recommendation (Collapsible) */}
             <motion.div
@@ -320,7 +306,7 @@ export default function SafetyCheck() {
                   color: 'var(--text-secondary)', fontFamily: 'inherit', padding: 0,
                 }}
               >
-                <span className="section-label" style={{ margin: 0 }}>SHARP RECOMMENDATION</span>
+                <span className="section-label" style={{ margin: 0 }}>SHARP CLINICAL RECOMMENDATION</span>
                 {showRaw ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
               </button>
               <AnimatePresence>
@@ -356,7 +342,7 @@ export default function SafetyCheck() {
               <Users size={18} color="var(--accent)" style={{ flexShrink: 0, marginTop: 2 }} />
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', letterSpacing: 0.8, marginBottom: 4 }}>
-                  HITL REQUIRED
+                  HITL SAFETY PROTOCOL
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
                   {result.disclaimer}

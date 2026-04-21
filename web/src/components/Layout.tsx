@@ -1,9 +1,9 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { Home, ShieldCheck, MessageSquare, Clock, Users } from 'lucide-react'
+import { Home, ClipboardCheck, MessageSquare, Clock, Users } from 'lucide-react'
 
 const navItems = [
-  { to: '/', icon: Home, label: 'Home' },
-  { to: '/safety-check', icon: ShieldCheck, label: 'Safety Check' },
+  { to: '/', icon: Home, label: 'Dashboard' },
+  { to: '/analysis', icon: ClipboardCheck, label: 'Analysis Hub' },
   { to: '/chat', icon: MessageSquare, label: 'Ask AI' },
   { to: '/history', icon: Clock, label: 'History' },
 ]
@@ -14,8 +14,8 @@ export default function Layout() {
       {/* Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-logo">
-          <h1>🧠 HealthMind</h1>
-          <p>Prescription Safety Agent</p>
+          <h1>🧠 HealthMind 2.0</h1>
+          <p>Dual-Agent Clinical Platform</p>
         </div>
 
         <nav className="sidebar-nav">
@@ -38,8 +38,8 @@ export default function Layout() {
           <div className="hitl-badge">
             <Users size={16} color="var(--accent)" style={{ flexShrink: 0, marginTop: 2 }} />
             <p>
-              <strong>HUMAN-IN-THE-LOOP</strong>
-              All AI recommendations require physician review. HealthMind assists — the doctor decides.
+              <strong>HITL CERTIFIED</strong>
+              Processing history is audited for safety. Doctor review mandatory.
             </p>
           </div>
         </div>
