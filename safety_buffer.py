@@ -1,217 +1,313 @@
 """
-HealthMind Safety Buffer
-Core safety logic for prescription evaluation.
+safety_buffer.py — SafetyBuffer clinical rule engine for HealthMind.
 
-Implements:
-  - FDA interaction severity scoring
-  - Specialized condition-drug rules (CKD + NSAID, etc.)
-  - SHARP-compliant recommendation formatting
+Implements hard-coded clinical safety rules that evaluate proposed medications
+against a patient's existing conditions and current medications.
+
+Rule precedence: BLOCK > WARN > ALLOW
 """
 
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Literal
 
-Status = Literal["BLOCK", "WARN", "ALLOW"]
-Priority = Literal["high", "medium", "low"]
-
-
-# ─── Specialized safety rules ─────────────────────────────────────────────────
-# Each rule is (condition_keyword, drug_keyword, status, priority, reason)
-
-SAFETY_RULES: list[tuple[str, str, Status, Priority, str]] = [
-    (
-        "stage 3 chronic kidney disease",
-        "nsaid",
-        "BLOCK",
-        "high",
-        "NSAIDs are contraindicated in Stage 3 CKD. They reduce renal blood flow and "
-        "can precipitate acute kidney injury or accelerate CKD progression.",
-    ),
-    (
-        "chronic kidney disease",
-        "nsaid",
-        "BLOCK",
-        "high",
-        "NSAIDs are contraindicated in patients with CKD due to nephrotoxicity risk.",
-    ),
-    (
-        "chronic kidney disease",
-        "metformin",
-        "WARN",
-        "medium",
-        "Metformin requires dose adjustment or may be contraindicated depending on eGFR. "
-        "Check current renal function before prescribing.",
-    ),
-    (
-        "warfarin",          # current medication keyword
-        "aspirin",
-        "WARN",
-        "high",
-        "Concurrent aspirin and warfarin significantly increases bleeding risk. "
-        "Monitor INR closely if co-prescribed.",
-    ),
-    (
-        "heart failure",
-        "nsaid",
-        "BLOCK",
-        "high",
-        "NSAIDs cause sodium and water retention and can worsen heart failure.",
-    ),
-    (
-        "peptic ulcer",
-        "nsaid",
-        "WARN",
-        "high",
-        "NSAIDs increase risk of GI bleeding in patients with peptic ulcer disease. "
-        "Consider a PPI or alternative analgesic.",
-    ),
-    (
-        "pregnancy",
-        "nsaid",
-        "BLOCK",
-        "high",
-        "NSAIDs (especially in the third trimester) are associated with premature ductus "
-        "arteriosus closure and oligohydramnios.",
-    ),
-    (
-        "renal failure",
-        "nsaid",
-        "BLOCK",
-        "high",
-        "NSAIDs are contraindicated in renal failure.",
-    ),
-]
-
-
-@dataclass
-class SafetyResult:
-    status: Status
-    priority: Priority
-    reason: str
-    sharp_recommendation: str
-    triggered_rules: list[str] = field(default_factory=list)
+from typing import Any
 
 
 class SafetyBuffer:
     """
-    Evaluates a proposed medication against a patient's context and
-    openFDA interaction findings. Returns a SafetyResult with a
-    SHARP-compliant physician recommendation.
+    Clinical safety rule engine.
 
-    The physician (Human-in-the-Loop) makes the final clinical decision.
+    Evaluates proposed medications against patient conditions and current
+    medications to determine if the prescription should be BLOCKED, receive
+    a WARNING, or be ALLOWED.
     """
 
-    def __init__(self, proposed_medication: str, patient_context: dict):
-        self.proposed = proposed_medication.lower().strip()
-        self.conditions: list[str] = [c.lower() for c in patient_context.get("conditions", [])]
-        self.medications: list[str] = [m.lower() for m in patient_context.get("medications", [])]
-        self.patient_name: str = patient_context.get("name", "the patient")
-        self.patient_id: str = patient_context.get("patient_id", "unknown")
+    CONDITION_DRUG_RULES: list[dict[str, str]] = [
+        {
+            "condition_keyword": "stage 3 chronic kidney disease",
+            "drug_keyword": "nsaid",
+            "status": "BLOCK",
+            "priority": "high",
+            "reason": "NSAIDs are contraindicated in Stage 3 CKD due to risk of "
+                       "acute kidney injury and accelerated renal function decline.",
+        },
+        {
+            "condition_keyword": "chronic kidney disease",
+            "drug_keyword": "nsaid",
+            "status": "BLOCK",
+            "priority": "high",
+            "reason": "NSAIDs are contraindicated in Chronic Kidney Disease due to "
+                       "nephrotoxicity and risk of further renal impairment.",
+        },
+        {
+            "condition_keyword": "chronic kidney disease",
+            "drug_keyword": "metformin",
+            "status": "WARN",
+            "priority": "medium",
+            "reason": "Metformin requires dose adjustment or monitoring in CKD patients "
+                       "due to increased risk of lactic acidosis with reduced renal clearance.",
+        },
+        {
+            "condition_keyword": "heart failure",
+            "drug_keyword": "nsaid",
+            "status": "BLOCK",
+            "priority": "high",
+            "reason": "NSAIDs are contraindicated in heart failure — they cause sodium "
+                       "and fluid retention, worsening cardiac function and increasing "
+                       "hospitalization risk.",
+        },
+        {
+            "condition_keyword": "peptic ulcer",
+            "drug_keyword": "nsaid",
+            "status": "WARN",
+            "priority": "high",
+            "reason": "NSAIDs increase the risk of gastrointestinal bleeding and "
+                       "ulcer perforation in patients with peptic ulcer disease.",
+        },
+        {
+            "condition_keyword": "pregnancy",
+            "drug_keyword": "nsaid",
+            "status": "BLOCK",
+            "priority": "high",
+            "reason": "NSAIDs are contraindicated in pregnancy, especially in the third "
+                       "trimester, due to risk of premature closure of the ductus arteriosus "
+                       "and oligohydramnios.",
+        },
+        {
+            "condition_keyword": "renal failure",
+            "drug_keyword": "nsaid",
+            "status": "BLOCK",
+            "priority": "high",
+            "reason": "NSAIDs are contraindicated in renal failure — they reduce renal "
+                       "blood flow and can precipitate acute-on-chronic kidney injury.",
+        },
+    ]
 
-    def _check_rules(self) -> list[tuple[Status, Priority, str]]:
-        """Apply specialized condition-drug and drug-drug rules."""
-        hits: list[tuple[Status, Priority, str]] = []
-        all_context = self.conditions + self.medications
+    MEDICATION_INTERACTION_RULES: list[dict[str, str]] = [
+        {
+            "current_med_keyword": "warfarin",
+            "proposed_keyword": "aspirin",
+            "status": "WARN",
+            "priority": "high",
+            "reason": "Concurrent use of warfarin and aspirin significantly increases "
+                       "bleeding risk. If clinically necessary, INR monitoring frequency "
+                       "should be increased and gastroprotective therapy considered.",
+        },
+    ]
 
-        for cond_kw, drug_kw, status, priority, reason in SAFETY_RULES:
-            cond_match = any(cond_kw in ctx for ctx in all_context)
-            drug_match = drug_kw in self.proposed or any(drug_kw in m for m in self.medications)
-            if cond_match and (drug_kw in self.proposed):
-                hits.append((status, priority, reason))
+    NSAID_KEYWORDS: list[str] = [
+        "ibuprofen", "naproxen", "diclofenac", "celecoxib", "meloxicam",
+        "indomethacin", "piroxicam", "ketorolac", "aspirin", "nsaid",
+        "advil", "motrin", "aleve", "voltaren", "celebrex", "mobic",
+    ]
 
-        return hits
+    STATUS_PRECEDENCE: dict[str, int] = {
+        "BLOCK": 3,
+        "WARN": 2,
+        "ALLOW": 1,
+    }
 
-    def _score_fda_interactions(
-        self, interaction_results: list[dict]
-    ) -> tuple[Status, Priority, str]:
-        """Derive a status from openFDA interaction findings."""
-        total_reports = sum(r.get("total_fda_reports", 0) for r in interaction_results)
-        serious_count = sum(
-            1
-            for r in interaction_results
-            for i in r.get("sample_interactions", [])
-            if i.get("serious")
-        )
+    def __init__(
+        self,
+        patient_name: str,
+        proposed_medication: str,
+        conditions: list[str],
+        current_medications: list[str],
+        allergies: list[str] | None = None,
+    ) -> None:
+        self.patient_name = patient_name
+        self.proposed_medication = proposed_medication
+        self.conditions = conditions
+        self.current_medications = current_medications
+        self.allergies = allergies or []
 
-        if total_reports > 100 or serious_count >= 3:
-            return (
-                "WARN",
-                "high",
-                f"openFDA reports {total_reports} adverse event reports for this drug combination, "
-                f"including {serious_count} marked serious.",
+    def _is_nsaid(self, drug_name: str) -> bool:
+        """Check if a drug name matches any known NSAID keyword."""
+        drug_lower = drug_name.lower()
+        return any(keyword in drug_lower for keyword in self.NSAID_KEYWORDS)
+
+    def _check_condition_rules(self) -> list[dict[str, str]]:
+        """Evaluate condition-based rules against the proposed medication."""
+        triggered: list[dict[str, str]] = []
+        proposed_lower = self.proposed_medication.lower()
+
+        for rule in self.CONDITION_DRUG_RULES:
+            condition_kw = rule["condition_keyword"]
+            drug_kw = rule["drug_keyword"]
+
+            condition_match = any(
+                condition_kw in c.lower() for c in self.conditions
             )
-        if total_reports > 20:
-            return (
-                "WARN",
-                "medium",
-                f"openFDA reports {total_reports} adverse events for this combination. "
-                "Review before prescribing.",
+            if not condition_match:
+                continue
+
+            if drug_kw == "nsaid":
+                drug_match = self._is_nsaid(proposed_lower)
+            else:
+                drug_match = drug_kw in proposed_lower
+
+            if drug_match:
+                triggered.append(rule)
+
+        return triggered
+
+    def _check_medication_interaction_rules(self) -> list[dict[str, str]]:
+        """Evaluate medication interaction rules."""
+        triggered: list[dict[str, str]] = []
+        proposed_lower = self.proposed_medication.lower()
+
+        for rule in self.MEDICATION_INTERACTION_RULES:
+            current_kw = rule["current_med_keyword"]
+            proposed_kw = rule["proposed_keyword"]
+
+            current_match = any(
+                current_kw in med.lower() for med in self.current_medications
             )
-        return (
-            "ALLOW",
-            "low",
-            f"openFDA shows {total_reports} adverse reports — no major signals detected.",
-        )
+            proposed_match = proposed_kw in proposed_lower
+
+            if current_match and proposed_match:
+                triggered.append(rule)
+
+        return triggered
+
+    def _check_allergy_rules(self) -> list[dict[str, str]]:
+        """Check if the proposed medication matches any known allergy."""
+        triggered: list[dict[str, str]] = []
+        proposed_lower = self.proposed_medication.lower()
+
+        for allergy in self.allergies:
+            if allergy.lower() in proposed_lower or proposed_lower in allergy.lower():
+                triggered.append({
+                    "status": "BLOCK",
+                    "priority": "high",
+                    "reason": f"Patient has a documented allergy to {allergy}. "
+                              f"Prescribing {self.proposed_medication} is contraindicated.",
+                })
+
+        return triggered
+
+    def evaluate(
+        self,
+        fda_interaction_results: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Run all safety rules and return the aggregate recommendation.
+
+        Parameters
+        ----------
+        fda_interaction_results : list[dict], optional
+            Results from openFDA drug interaction queries.
+
+        Returns
+        -------
+        dict with status, priority, reasons, sharp_recommendation, hitl_required, disclaimer
+        """
+        all_triggered: list[dict[str, str]] = []
+
+        all_triggered.extend(self._check_condition_rules())
+        all_triggered.extend(self._check_medication_interaction_rules())
+        all_triggered.extend(self._check_allergy_rules())
+
+        fda_flags: list[str] = []
+        if fda_interaction_results:
+            for interaction in fda_interaction_results:
+                if interaction.get("has_interactions") and interaction.get("severity") == "high":
+                    fda_flags.append(
+                        f"FDA AERS reports indicate significant adverse event reports "
+                        f"for {interaction.get('drug_pair', 'unknown pair')}: "
+                        f"{interaction.get('total_fda_reports', 0)} reports found."
+                    )
+
+        if not all_triggered and not fda_flags:
+            status = "ALLOW"
+            priority = "low"
+            reasons = [
+                f"No contraindications found for {self.proposed_medication} "
+                f"given the patient's current conditions and medications."
+            ]
+        else:
+            highest_precedence = 0
+            for rule in all_triggered:
+                rule_prec = self.STATUS_PRECEDENCE.get(rule["status"], 0)
+                if rule_prec > highest_precedence:
+                    highest_precedence = rule_prec
+
+            if fda_flags and highest_precedence < self.STATUS_PRECEDENCE["WARN"]:
+                highest_precedence = self.STATUS_PRECEDENCE["WARN"]
+
+            status = "ALLOW"
+            for s, p in self.STATUS_PRECEDENCE.items():
+                if p == highest_precedence:
+                    status = s
+                    break
+
+            priority_map = {"BLOCK": "high", "WARN": "medium", "ALLOW": "low"}
+            priority = priority_map.get(status, "low")
+
+            if all_triggered:
+                max_triggered = max(
+                    all_triggered,
+                    key=lambda r: self.STATUS_PRECEDENCE.get(r.get("status", "ALLOW"), 0),
+                )
+                if max_triggered.get("priority") == "high":
+                    priority = "high"
+
+            reasons = [r["reason"] for r in all_triggered] + fda_flags
+
+        sharp = self._build_sharp_recommendation(status, priority, reasons)
+
+        return {
+            "status": status,
+            "priority": priority,
+            "reasons": reasons,
+            "sharp_recommendation": sharp,
+            "hitl_required": True,
+            "disclaimer": (
+                "This is an AI-generated safety assessment. A licensed healthcare "
+                "provider must review and approve all prescribing decisions. "
+                "Human-in-the-Loop (HITL) validation is required before any "
+                "medication is administered."
+            ),
+        }
 
     def _build_sharp_recommendation(
-        self, status: Status, priority: Priority, reason: str
+        self,
+        status: str,
+        priority: str,
+        reasons: list[str],
     ) -> str:
-        """
-        Format a SHARP-compliant recommendation string for the physician.
-        SHARP recommendations are structured for EMR integration.
-        """
+        """Build a SHARP-compliant formatted recommendation string."""
         status_label = {
-            "BLOCK": "CONTRAINDICATION DETECTED — DO NOT PRESCRIBE without specialist review",
-            "WARN": "CAUTION — Review required before prescribing",
-            "ALLOW": "No major contraindications detected",
-        }[status]
+            "BLOCK": "⛔ BLOCKED — Do NOT prescribe",
+            "WARN": "⚠️  WARNING — Prescribe with caution",
+            "ALLOW": "✅ ALLOWED — No contraindications detected",
+        }.get(status, "UNKNOWN")
+
+        clinical_rationale = "\n".join(f"  • {r}" for r in reasons) if reasons else "  • None"
+
+        conditions_str = ", ".join(self.conditions) if self.conditions else "None documented"
+        medications_str = ", ".join(self.current_medications) if self.current_medications else "None documented"
+        allergies_str = ", ".join(self.allergies) if self.allergies else "None documented"
 
         return (
             f"[SHARP SAFETY RECOMMENDATION]\n"
-            f"Patient: {self.patient_name} (ID: {self.patient_id})\n"
-            f"Proposed medication: {self.proposed.upper()}\n"
-            f"Safety status: {status} ({priority.upper()} priority)\n"
-            f"Assessment: {status_label}\n"
-            f"Clinical rationale: {reason}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Patient:              {self.patient_name}\n"
+            f"Proposed Medication:  {self.proposed_medication}\n"
+            f"Decision:             {status_label}\n"
+            f"Priority:             {priority.upper()}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"\n"
-            f"IMPORTANT: This recommendation is AI-generated and requires physician "
-            f"review and approval (Human-in-the-Loop). The prescribing physician retains "
-            f"full clinical responsibility for the final decision."
-        )
-
-    def evaluate(self, interaction_results: list[dict]) -> SafetyResult:
-        """
-        Run the full safety evaluation pipeline.
-        Rule-based blocks take precedence over FDA scoring.
-        """
-        rule_hits = self._check_rules()
-        fda_status, fda_priority, fda_reason = self._score_fda_interactions(interaction_results)
-
-        # Determine final status: BLOCK > WARN > ALLOW
-        triggered: list[str] = []
-        final_status: Status = fda_status
-        final_priority: Priority = fda_priority
-        final_reason = fda_reason
-
-        for r_status, r_priority, r_reason in rule_hits:
-            triggered.append(r_reason)
-            if r_status == "BLOCK":
-                final_status = "BLOCK"
-                final_priority = "high"
-                final_reason = r_reason
-                break
-            elif r_status == "WARN" and final_status == "ALLOW":
-                final_status = "WARN"
-                final_priority = r_priority
-                final_reason = r_reason
-
-        sharp = self._build_sharp_recommendation(final_status, final_priority, final_reason)
-
-        return SafetyResult(
-            status=final_status,
-            priority=final_priority,
-            reason=final_reason,
-            sharp_recommendation=sharp,
-            triggered_rules=triggered,
+            f"CLINICAL RATIONALE:\n"
+            f"{clinical_rationale}\n"
+            f"\n"
+            f"PATIENT CONTEXT:\n"
+            f"  Conditions:   {conditions_str}\n"
+            f"  Medications:  {medications_str}\n"
+            f"  Allergies:    {allergies_str}\n"
+            f"\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"HITL NOTICE: This recommendation requires review and approval\n"
+            f"by a licensed healthcare provider before any action is taken.\n"
+            f"AI-generated safety assessments do not replace clinical judgment.\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
