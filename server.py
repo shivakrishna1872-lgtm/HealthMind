@@ -24,6 +24,9 @@ from fastmcp import FastMCP
 
 from fhir_utils import build_sample_fhir_bundle, parse_fhir_bundle
 from safety_buffer import SafetyBuffer
+from document_validator import DocumentValidator
+
+_validator = DocumentValidator()
 
 load_dotenv()
 
@@ -216,6 +219,22 @@ from starlette.routing import Route
 from starlette.middleware.cors import CORSMiddleware
 
 
+async def handle_validate(request: Request) -> JSONResponse:
+    """POST /validate — Classify and validate a clinical document."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "Invalid JSON body"}, status_code=400)
+
+    text = body.get("text", "").strip()
+    if not text:
+        return JSONResponse({"detail": "text is required"}, status_code=400)
+
+    result = _validator.validate(text)
+    status_code = 200 if result["action"] == "accept" else 422
+    return JSONResponse(result, status_code=status_code)
+
+
 async def handle_check(request: Request) -> JSONResponse:
     """POST /check — Run a safety check from the mobile app."""
     try:
@@ -229,6 +248,15 @@ async def handle_check(request: Request) -> JSONResponse:
     if not proposed:
         return JSONResponse(
             {"detail": "proposed_medication is required"}, status_code=400
+        )
+
+    # Validate proposed medication input
+    validation = _validator.validate(proposed)
+    if validation["action"] == "reject":
+        return JSONResponse(
+            {"detail": "Input rejected by clinical document validator",
+             "validation": validation},
+            status_code=422,
         )
 
     if not patient_json:
@@ -581,6 +609,15 @@ async def handle_analyze(request: Request) -> JSONResponse:
     if not text:
         return JSONResponse({"detail": "input text is required"}, status_code=400)
 
+    # Pre-validate input before analysis
+    validation = _validator.validate(text)
+    if validation["action"] == "reject":
+        return JSONResponse(
+            {"detail": "Input rejected by clinical document validator",
+             "validation": validation},
+            status_code=422,
+        )
+
     if not patient_json:
         patient_json = json.dumps(build_sample_fhir_bundle())
 
@@ -688,6 +725,7 @@ def create_app():
 
     routes = [
         Route("/health", handle_health, methods=["GET"]),
+        Route("/validate", handle_validate, methods=["POST"]),
         Route("/check", handle_check, methods=["POST"]),
         Route("/chat", handle_chat, methods=["POST"]),
         Route("/diagnose", handle_diagnose, methods=["POST"]),
@@ -723,6 +761,8 @@ if __name__ == "__main__":
     print(f"  Health:    http://{MCP_HOST}:{MCP_PORT}/health")
     print(f"  Check:     POST http://{MCP_HOST}:{MCP_PORT}/check")
     print(f"  Chat:      POST http://{MCP_HOST}:{MCP_PORT}/chat")
+    print("  ─────────────────────────────────────────")
+    print(f"  Validate:  POST http://{MCP_HOST}:{MCP_PORT}/validate")
     print("  ─────────────────────────────────────────")
     print("  MCP tools: drug_interaction, fhir_context, safety_check")
     print("=" * 60)
